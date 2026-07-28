@@ -336,7 +336,7 @@ function sketch(p){
     const S=128; sprite=p.createGraphics(S,S); sprite.pixelDensity(1);
     sprite.clear(); sprite.noStroke();
     for(let r=S/2;r>0;r--){ sprite.fill(255,255,255,255*Math.pow(1-r/(S/2),2.4)); sprite.circle(S/2,S/2,r*2); }
-    render(); setStep(0,true);
+    setStep(0,true);
   };
   p.windowResized=function(){
     const box=$('holder').parentElement.getBoundingClientRect();
