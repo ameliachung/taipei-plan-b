@@ -369,7 +369,9 @@ function sketch(p){
       const d=v.near_clinic_m*(1-t)+v.near_pharm_m*t;
       const near=Math.max(0,1-Math.min(d,2000)/2000);
       const beat=0.86+0.14*Math.sin(pulse*1.7+i*0.11);
-      const inHi=hiSet&&hiSet.has(i);
+      // hiSet is a Set of village indices, except on the facility step where it is
+      // the string 'nowpts' — there the highlight lives on the points, not the villages
+      const inHi=hiSet instanceof Set && hiSet.has(i);
       const dim=1-hiT*(inHi?0:0.82);
       const boost=inHi?1+1.05*hiT:1;
       const r=(9+30*Math.sqrt((v.female||0)/FEMMAX))*(0.55+0.75*near)*(sc*cam.z/9000)*boost;
