@@ -313,6 +313,23 @@ let W=760,H=680,sc=1,PAD=30;
 let cam={...HOME}, camT={...HOME};
 let t=0, tT=0, pulse=0, hoverIdx=-1, hiSet=null, hiT=0, manual=false, active=0;
 let sprite=null, lang='en';
+let outlineBuf=null, outlineKey=null;
+let haloSprite=null, haloKey=null, nowSprite=null, aftSprite=null;
+
+/* Pre-coloured copies of the white glow sprite.
+   p5's tint() re-colours the whole sprite pixel-by-pixel on every image() call,
+   which at ~2,900 calls/frame is the entire frame budget. Drawing an already
+   coloured sprite with globalAlpha is identical maths (white*tintRGB*tintA
+   === tintRGB*globalAlpha) but costs one drawImage. */
+function paint(dst,r,g,b){
+  const S=sprite.width, c=dst.drawingContext;
+  dst.clear();
+  c.drawImage(sprite.canvas,0,0,S,S);
+  c.globalCompositeOperation='source-in';
+  c.fillStyle='rgb('+Math.round(r)+','+Math.round(g)+','+Math.round(b)+')';
+  c.fillRect(0,0,S,S);
+  c.globalCompositeOperation='source-over';
+}
 const $=id=>document.getElementById(id);
 const reduce=window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -336,12 +353,18 @@ function sketch(p){
     const S=128; sprite=p.createGraphics(S,S); sprite.pixelDensity(1);
     sprite.clear(); sprite.noStroke();
     for(let r=S/2;r>0;r--){ sprite.fill(255,255,255,255*Math.pow(1-r/(S/2),2.4)); sprite.circle(S/2,S/2,r*2); }
+    haloSprite=p.createGraphics(S,S); haloSprite.pixelDensity(1);
+    nowSprite =p.createGraphics(S,S); nowSprite.pixelDensity(1);  paint(nowSprite,C_NOW[0],C_NOW[1],C_NOW[2]);
+    aftSprite =p.createGraphics(S,S); aftSprite.pixelDensity(1);  paint(aftSprite,C_AFT[0],C_AFT[1],C_AFT[2]);
+    outlineBuf=p.createGraphics(W,H); outlineBuf.pixelDensity(p.pixelDensity());
     setStep(0,true);
   };
   p.windowResized=function(){
     const box=$('holder').parentElement.getBoundingClientRect();
     fit(box.width, window.innerHeight*(window.innerWidth<840?0.46:0.86));
     p.resizeCanvas(W,H);
+    outlineBuf=p.createGraphics(W,H); outlineBuf.pixelDensity(p.pixelDensity());
+    outlineKey=null;
   };
   p.draw=function(){
     if(!reduce) pulse+=0.016;
@@ -350,20 +373,33 @@ function sketch(p){
     cam.lon += (camT.lon-cam.lon)*0.06;
     cam.lat += (camT.lat-cam.lat)*0.06;
     cam.z   += (camT.z  -cam.z  )*0.06;
+    if(Math.abs(camT.lon-cam.lon)<1e-6) cam.lon=camT.lon;
+    if(Math.abs(camT.lat-cam.lat)<1e-6) cam.lat=camT.lat;
+    if(Math.abs(camT.z  -cam.z  )<1e-6) cam.z  =camT.z;
 
     p.clear(); p.background(10,10,18);
 
-    // village outlines
-    p.noFill(); p.stroke(60,56,80,110); p.strokeWeight(0.7);
-    for(const v of V){
-      if(!v.poly||v.poly.length<3) continue;
-      p.beginShape();
-      for(const q of v.poly) p.vertex(px(q[0]),py(q[1]));
-      p.endShape(p.CLOSE);
+    // village outlines — redrawn only when the camera actually moves, otherwise reused
+    const ck=cam.lon.toFixed(5)+','+cam.lat.toFixed(5)+','+cam.z.toFixed(4);
+    if(ck!==outlineKey){
+      outlineBuf.clear();
+      outlineBuf.noFill(); outlineBuf.stroke(60,56,80,110); outlineBuf.strokeWeight(0.7);
+      for(const v of V){
+        if(!v.poly||v.poly.length<3) continue;
+        outlineBuf.beginShape();
+        for(const q of v.poly) outlineBuf.vertex(px(q[0]),py(q[1]));
+        outlineBuf.endShape(outlineBuf.CLOSE);
+      }
+      outlineKey=ck;
     }
+    p.image(outlineBuf,0,0);
 
     const hue=[C_NOW[0]+(C_AFT[0]-C_NOW[0])*t, C_NOW[1]+(C_AFT[1]-C_NOW[1])*t, C_NOW[2]+(C_AFT[2]-C_NOW[2])*t];
+    const hk=Math.round(hue[0])+','+Math.round(hue[1])+','+Math.round(hue[2]);
+    if(hk!==haloKey){ paint(haloSprite,hue[0],hue[1],hue[2]); haloKey=hk; }
     p.blendMode(p.ADD);
+    p.noTint();
+    const dc=p.drawingContext;
     for(let i=0;i<V.length;i++){
       const v=V[i];
       const d=v.near_clinic_m*(1-t)+v.near_pharm_m*t;
@@ -376,12 +412,13 @@ function sketch(p){
       const boost=inHi?1+1.05*hiT:1;
       const r=(9+30*Math.sqrt((v.female||0)/FEMMAX))*(0.55+0.75*near)*(sc*cam.z/9000)*boost;
       const a=(16+108*near*near)*beat*dim*boost*(i===hoverIdx?1.9:1);
-      p.tint(hue[0],hue[1],hue[2],a);
-      p.image(sprite,px(v.cx)-r,py(v.cy)-r,r*2,r*2);
+      dc.globalAlpha=Math.min(1,a/255);
+      p.image(haloSprite,px(v.cx)-r,py(v.cy)-r,r*2,r*2);
     }
     const facBoost=(hiSet==='nowpts')?1.9:1;
-    fac(p,NOW_PTS,C_NOW,Math.pow(1-t,0.8)*facBoost);
-    fac(p,PH_PTS ,C_AFT,Math.pow(t,0.8));
+    fac(p,NOW_PTS,nowSprite,Math.pow(1-t,0.8)*facBoost);
+    fac(p,PH_PTS ,aftSprite,Math.pow(t,0.8));
+    dc.globalAlpha=1;
     p.blendMode(p.BLEND); p.noTint();
 
     if(hoverIdx>=0){
@@ -391,14 +428,16 @@ function sketch(p){
     }
   };
 }
-function fac(p,arr,col,a){
+function fac(p,arr,spr,a){
   if(a<=0.02) return;
   const gr=Math.max(7,sc*cam.z*0.0016);
+  const dc=p.drawingContext;
+  const aGlow=Math.min(1,52*Math.min(a,1)/255), aCore=Math.min(1,120*Math.min(a,1)/255);
   for(let i=0;i<arr.length;i++){
     const x=px(arr[i][0]), y=py(arr[i][1]);
     if(x<-30||x>W+30||y<-30||y>H+30) continue;
-    p.tint(col[0],col[1],col[2],52*Math.min(a,1)); p.image(sprite,x-gr,y-gr,gr*2,gr*2);
-    p.tint(255,255,255,120*Math.min(a,1));         p.image(sprite,x-1.9,y-1.9,3.8,3.8);
+    dc.globalAlpha=aGlow; p.image(spr   ,x-gr,y-gr,gr*2,gr*2);
+    dc.globalAlpha=aCore; p.image(sprite,x-1.9,y-1.9,3.8,3.8);
   }
 }
 

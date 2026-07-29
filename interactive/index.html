@@ -155,6 +155,21 @@ const py = lat => oy + (BB.maxLat-lat)*sc;
 
 // ---------- state ----------
 let t = 0, sprite = null, statics = null, hoverIdx = -1, pulse = 0;
+let haloSprite = null, haloKey = null, nowSprite = null, aftSprite = null;
+
+/* Pre-coloured copies of the white glow sprite.
+   p5's tint() rebuilds the whole tinted sprite on every image() call, which at
+   ~2,900 calls/frame is the entire frame budget. Drawing an already coloured
+   sprite with globalAlpha is identical maths for one drawImage. */
+function paint(dst, r, g, b){
+  const S = sprite.width, c = dst.drawingContext;
+  dst.clear();
+  c.drawImage(sprite.canvas, 0, 0, S, S);
+  c.globalCompositeOperation = 'source-in';
+  c.fillStyle = 'rgb('+Math.round(r)+','+Math.round(g)+','+Math.round(b)+')';
+  c.fillRect(0, 0, S, S);
+  c.globalCompositeOperation = 'source-over';
+}
 const FEMMAX = V.reduce((m,v)=>Math.max(m, v.female||0), 0);
 const TOTF   = V.reduce((s,v)=>s+(v.female||0), 0);
 const $ = id => document.getElementById(id);
@@ -181,7 +196,12 @@ function sketch(p){
                   C_NOW[1]+(C_AFT[1]-C_NOW[1])*t,
                   C_NOW[2]+(C_AFT[2]-C_NOW[2])*t ];
 
+    const hk = Math.round(hue[0])+','+Math.round(hue[1])+','+Math.round(hue[2]);
+    if(hk !== haloKey){ paint(haloSprite, hue[0], hue[1], hue[2]); haloKey = hk; }
+
     p.blendMode(p.ADD);
+    p.noTint();
+    const dc = p.drawingContext;
     // village halos: hue = scenario, brightness = accessibility
     for(let i=0;i<V.length;i++){
       const v = V[i];
@@ -190,12 +210,13 @@ function sketch(p){
       const beat = 0.86 + 0.14*Math.sin(pulse*1.7 + i*0.11);
       const r = (9 + 30*Math.sqrt((v.female||0)/FEMMAX)) * (0.55 + 0.75*near) * (sc/9000);
       const a = (16 + 108*near*near) * beat * (i===hoverIdx ? 2.1 : 1);
-      p.tint(hue[0], hue[1], hue[2], a);
-      p.image(sprite, px(v.cx)-r, py(v.cy)-r, r*2, r*2);
+      dc.globalAlpha = Math.min(1, a/255);
+      p.image(haloSprite, px(v.cx)-r, py(v.cy)-r, r*2, r*2);
     }
     // facility layers cross-fade
-    drawFac(p, NOW_PTS, C_NOW, Math.pow(1-t,0.8));
-    drawFac(p, PH_PTS,  C_AFT, Math.pow(t,0.8));
+    drawFac(p, NOW_PTS, nowSprite, Math.pow(1-t,0.8));
+    drawFac(p, PH_PTS,  aftSprite, Math.pow(t,0.8));
+    dc.globalAlpha = 1;
     p.blendMode(p.BLEND); p.noTint();
 
     if(hoverIdx>=0){
@@ -206,15 +227,17 @@ function sketch(p){
   };
 }
 
-function drawFac(p, arr, col, a){
+function drawFac(p, arr, spr, a){
   if(a<=0.02) return;
   const gr = Math.max(7, sc*0.0016);
+  const dc = p.drawingContext;
+  const aGlow = Math.min(1, 52*a/255), aCore = Math.min(1, 120*a/255);
   for(let i=0;i<arr.length;i++){
     const x=px(arr[i][0]), y=py(arr[i][1]);
     if(x<-30||x>W+30||y<-30||y>H+30) continue;
-    p.tint(col[0],col[1],col[2], 52*a);
-    p.image(sprite, x-gr, y-gr, gr*2, gr*2);
-    p.tint(255,255,255, 120*a);
+    dc.globalAlpha = aGlow;
+    p.image(spr, x-gr, y-gr, gr*2, gr*2);
+    dc.globalAlpha = aCore;
     p.image(sprite, x-1.9, y-1.9, 3.8, 3.8);
   }
 }
@@ -227,6 +250,9 @@ function buildSprite(p){
     sprite.fill(255,255,255, 255*Math.pow(f,2.4));
     sprite.circle(S/2,S/2,r*2);
   }
+  haloSprite = p.createGraphics(S,S); haloSprite.pixelDensity(1);
+  nowSprite  = p.createGraphics(S,S); nowSprite.pixelDensity(1);  paint(nowSprite, C_NOW[0], C_NOW[1], C_NOW[2]);
+  aftSprite  = p.createGraphics(S,S); aftSprite.pixelDensity(1);  paint(aftSprite, C_AFT[0], C_AFT[1], C_AFT[2]);
 }
 
 function buildStatic(p){
