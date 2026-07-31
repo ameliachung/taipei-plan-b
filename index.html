@@ -20,12 +20,27 @@
     font-family:Inter,"Noto Sans TC",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
   body.zh{font-family:"Noto Sans TC",Inter,system-ui,sans-serif}
 
-  /* ---------- language toggle ---------- */
-  #lang{position:fixed;right:18px;top:16px;z-index:60;background:rgba(14,14,24,.86);
+  /* ---------- top-right controls ---------- */
+  #ctl{position:fixed;right:18px;top:16px;z-index:60;display:flex;gap:8px}
+  #ctl button{background:rgba(14,14,24,.86);
     border:1px solid var(--line);color:var(--ink);border-radius:999px;padding:8px 16px;
     font:600 12.5px Inter,"Noto Sans TC",sans-serif;letter-spacing:.06em;cursor:pointer;
-    backdrop-filter:blur(8px);transition:border-color .2s}
-  #lang:hover{border-color:var(--after)}
+    backdrop-filter:blur(8px);transition:border-color .2s,color .2s}
+  #ctl button:hover{border-color:var(--after)}
+  #snd{display:flex;align-items:center;gap:7px}
+  #snd .wave{display:inline-block;width:13px;height:9px;position:relative}
+  /* three bars that only animate while sound is on */
+  #snd .wave i{position:absolute;bottom:0;width:3px;background:var(--faint);border-radius:1px;
+    height:3px;transition:background .2s}
+  #snd .wave i:nth-child(1){left:0}
+  #snd .wave i:nth-child(2){left:5px}
+  #snd .wave i:nth-child(3){left:10px}
+  #snd.on{color:var(--after);border-color:var(--after)}
+  #snd.on .wave i{background:var(--after);animation:eq .9s ease-in-out infinite}
+  #snd.on .wave i:nth-child(2){animation-delay:.15s}
+  #snd.on .wave i:nth-child(3){animation-delay:.3s}
+  @keyframes eq{0%,100%{height:3px}50%{height:9px}}
+  @media(prefers-reduced-motion:reduce){#snd.on .wave i{animation:none;height:6px}}
 
   .wrap{max-width:1280px;margin:0 auto;padding:0 24px}
 
@@ -116,7 +131,10 @@
 </style>
 </head>
 <body>
-<button id="lang">中文</button>
+<div id="ctl">
+  <button id="snd" aria-pressed="false"><span class="wave" aria-hidden="true"><i></i><i></i><i></i></span><span id="sndLbl"></span></button>
+  <button id="lang">中文</button>
+</div>
 
 <div class="wrap">
   <section class="hero">
@@ -200,7 +218,7 @@ const STEPS = [
 
 const COPY = {
 en:{
- lang:'中文', kicker:'Taipei · 456 villages', title:['Taipei ','Plan B'],
+ lang:'中文', snd:'SOUND', sndOn:'SOUND ON', kicker:'Taipei · 456 villages', title:['Taipei ','Plan B'],
  dek:'Emergency contraception is still prescription-only in Taiwan. This is what that rule costs, measured in metres — and what would change if the drug moved to the pharmacy counter.',
  cue:'SCROLL',
  steps:[
@@ -253,7 +271,7 @@ en:{
  method:'<b>Method</b>　Distance is a straight line from each village’s area-weighted centroid to the nearest pickup point — a lower bound on the real walk. Villages are counted unweighted; the population share is weighted by the number of women.'
 },
 zh:{
- lang:'EN', kicker:'台北 · 456 個里', title:['Taipei ','Plan B'],
+ lang:'EN', snd:'音效', sndOn:'音效開', kicker:'台北 · 456 個里', title:['Taipei ','Plan B'],
  dek:'在台灣，事後避孕藥仍是處方藥。這件事的代價可以用公尺量——而如果這顆藥被放到藥局櫃檯，又會改變什麼。',
  cue:'向下捲動',
  steps:[
@@ -305,6 +323,149 @@ zh:{
  data:'<b>資料</b>　里級女性人口：內政部戶政司（'+D.meta.pop_month+'）　·　婦產科診所與醫院婦產部：臺北市政府衛生局，以及健保特約醫學中心與區域醫院　·　藥局：臺北市政府衛生局（858／907）　·　里界：內政部國土測繪中心（2026-06-24）　·　透過 Twinkle Hub 取得。',
  method:'<b>方法</b>　距離為各里面積加權質心到最近取得點的直線距離，是實際步行距離的下限。里數為未加權計數，人口比例則以女性人數加權。'
 }};
+
+/* ============ sound ============ */
+/* Every sound on this page is synthesised in the browser — no audio files, no
+   network requests. Pitch is tied to the data wherever it can be: the slider
+   tone follows the live median distance, the hover tick follows the distance of
+   the village under the cursor. Sound stays off until the reader presses the
+   button, which doubles as the user gesture browsers require before an
+   AudioContext is allowed to start. */
+const SND = (function(){
+  let ctx=null, master=null, on=false;
+  let sOsc=null, sSub=null, sGain=null, sFilt=null, sTimer=null;
+  let lastTick=0;
+
+  function build(){
+    if(ctx) return;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if(!AC) return;
+    ctx = new AC();
+    const comp = ctx.createDynamicsCompressor();
+    comp.threshold.value=-16; comp.knee.value=12; comp.ratio.value=8;
+    comp.attack.value=.004; comp.release.value=.22;
+    master = ctx.createGain(); master.gain.value=.0001;
+    master.connect(comp); comp.connect(ctx.destination);
+  }
+  const live = ()=> on && ctx && ctx.state==='running';
+
+  /* one enveloped oscillator, optionally swept and low-passed */
+  function blip(o){
+    if(!live()) return;
+    const t0 = ctx.currentTime + (o.delay||0), end = t0 + o.dur;
+    const osc = ctx.createOscillator();
+    osc.type = o.type||'sine';
+    osc.frequency.setValueAtTime(o.f, t0);
+    if(o.f2) osc.frequency.exponentialRampToValueAtTime(o.f2, t0+(o.glide||o.dur));
+    let node = osc;
+    if(o.cut){
+      const lp = ctx.createBiquadFilter();
+      lp.type='lowpass';
+      lp.frequency.setValueAtTime(o.cut, t0);
+      if(o.cut2) lp.frequency.exponentialRampToValueAtTime(o.cut2, t0+(o.glide||o.dur));
+      node.connect(lp); node = lp;
+    }
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(.0001, t0);
+    g.gain.exponentialRampToValueAtTime(o.peak, t0+(o.atk||.006));
+    g.gain.exponentialRampToValueAtTime(.0001, end);
+    node.connect(g); g.connect(master);
+    osc.start(t0); osc.stop(end+.05);
+  }
+
+  /* a step scrolls into view: 60 Hz body, plus a higher layer so it still
+     reads on laptop speakers that cannot reproduce 60 Hz at all */
+  function step(after){
+    blip({f:66,  f2:42, dur:.45, peak:.40, atk:.008});
+    blip({f:after?168:140, f2:after?96:80, dur:.20, peak:.09, atk:.004});
+  }
+
+  /* the numbers in that step tick in, low for Now, high for After.
+     Queued on timers rather than scheduled ahead in the AudioContext, so that
+     scrolling quickly past a step cancels its numbers instead of stacking
+     them on top of the next one's. */
+  const SCALE=[0,3,5,7,10,12];
+  let numJobs=[];
+  function numbers(kinds){
+    numJobs.forEach(clearTimeout); numJobs=[];
+    kinds.slice(0,6).forEach((k,i)=>{
+      const base = k==='b' ? 440 : k==='a' ? 220 : 330;
+      const f = base*Math.pow(2, SCALE[i%SCALE.length]/12);
+      numJobs.push(setTimeout(()=>blip({f, type:'triangle', cut:2400,
+        dur:.55, peak:.07, atk:.012}), 240+i*170));
+    });
+  }
+
+  /* the one moment the law changes: C2 up to C3 */
+  function shift(){
+    blip({f:65.41,  f2:130.81, dur:2.2, glide:1.9, peak:.20, atk:.35});
+    blip({f:130.81, f2:261.63, type:'triangle', cut:380, cut2:1900,
+          dur:2.2, glide:1.9, peak:.065, atk:.55});
+  }
+
+  /* sustained tone under the finale slider; u is 0 at the Now median (532 m)
+     and 1 at the After median (204 m), so the pitch rises exactly one octave
+     as the city gets closer to the drug */
+  function scrub(u){
+    if(!live()) return;
+    const f = 196*Math.pow(2,u), t = ctx.currentTime;
+    if(!sOsc){
+      sOsc = ctx.createOscillator(); sOsc.type='sine';
+      sSub = ctx.createOscillator(); sSub.type='triangle';
+      sFilt = ctx.createBiquadFilter(); sFilt.type='lowpass'; sFilt.frequency.value=1400;
+      sGain = ctx.createGain(); sGain.gain.value=.0001;
+      const mix = ctx.createGain(); mix.gain.value=.26;
+      sOsc.connect(sFilt); sSub.connect(mix); mix.connect(sFilt);
+      sFilt.connect(sGain); sGain.connect(master);
+      sOsc.frequency.value=f; sSub.frequency.value=f*2;
+      sOsc.start(); sSub.start();
+      sGain.gain.setTargetAtTime(.13, t, .05);
+    }
+    sOsc.frequency.setTargetAtTime(f, t, .04);
+    sSub.frequency.setTargetAtTime(f*2, t, .04);
+    sFilt.frequency.setTargetAtTime(700+1800*u, t, .06);
+    clearTimeout(sTimer);
+    sTimer = setTimeout(scrubEnd, 220);
+  }
+  function scrubEnd(){
+    if(!sOsc || !ctx) return;
+    const t = ctx.currentTime;
+    sGain.gain.cancelScheduledValues(t);
+    sGain.gain.setTargetAtTime(.0001, t, .09);
+    sOsc.stop(t+.7); sSub.stop(t+.7);
+    sOsc=sSub=sGain=sFilt=null;
+  }
+
+  /* hovering a village: the further it is from a pickup point, the lower and
+     duller its tick */
+  function tick(d){
+    if(!live()) return;
+    const ms = performance.now();
+    if(ms-lastTick < 55) return;
+    lastTick = ms;
+    const u = Math.min(1, d/4000);
+    blip({f:880-560*u, cut:4200-3500*u, dur:.09, peak:.045, atk:.003});
+  }
+
+  function toggle(){
+    build();
+    if(!ctx) return false;
+    on = !on;
+    if(on){
+      if(ctx.state==='suspended') ctx.resume();
+      master.gain.cancelScheduledValues(ctx.currentTime);
+      master.gain.setTargetAtTime(.9, ctx.currentTime, .08);
+      blip({f:196, dur:.5, peak:.11, atk:.02});
+      blip({f:392, dur:.6, peak:.055, atk:.02, delay:.13});
+    }else{
+      scrubEnd();
+      master.gain.cancelScheduledValues(ctx.currentTime);
+      master.gain.setTargetAtTime(.0001, ctx.currentTime, .06);
+    }
+    return on;
+  }
+  return {toggle, step, numbers, shift, scrub, tick, isOn:()=>on};
+})();
 
 /* ============ projection + camera ============ */
 const LAT0=(BB.minLat+BB.maxLat)/2, KX=Math.cos(LAT0*Math.PI/180);
@@ -359,6 +520,9 @@ function sketch(p){
     aftSprite =p.createGraphics(S,S); aftSprite.pixelDensity(1);  paint(aftSprite,C_AFT[0],C_AFT[1],C_AFT[2]);
     outlineBuf=p.createGraphics(W,H); outlineBuf.pixelDensity(p.pixelDensity());
     setStep(0,true);
+    // setStep is idempotent, so clearing `active` here costs nothing visually
+    // and lets the reader's arrival at the first step sound like every other one
+    active=-1;
   };
   p.windowResized=function(){
     const box=$('holder').parentElement.getBoundingClientRect();
@@ -465,11 +629,15 @@ function updateMetrics(){
   $('phaseV').textContent = v<0.5?L.now:L.after;
   $('phaseV').style.color = v<0.5?'var(--now)':'var(--after)';
   $('phaseS').textContent = v<0.5?L.nowSub:L.aftSub;
+  return m;
 }
+// the two ends of the slider tone, in metres
+const MED_NOW=metrics(0).med, MED_AFT=metrics(1).med;
 
 /* ============ steps ============ */
 function setStep(i,force){
   if(i===active&&!force) return;
+  const prevT=tT;
   active=i; manual=false;
   const s=STEPS[i];
   tT=s.t; hiSet=s.hi;
@@ -482,6 +650,14 @@ function setStep(i,force){
     el.classList.toggle('on',k===i);
     el.classList.toggle('aft',STEPS[k].t>=0.5);
   });
+  // force means setup or a language rebuild, not a reader arriving at the step
+  if(!force){
+    SND.step(s.t>=0.5);
+    if(prevT<0.5 && s.t>=0.5) SND.shift();
+    const el=document.querySelector('.step[data-i="'+i+'"]');
+    if(el) SND.numbers([...el.querySelectorAll('.num')].map(n=>
+      n.classList.contains('b')?'b':n.classList.contains('a')?'a':''));
+  }
 }
 
 function buildSteps(){
@@ -496,7 +672,7 @@ function buildSteps(){
   },{rootMargin:'-45% 0px -45% 0px'});
   document.querySelectorAll('.step').forEach(el=>window.__obs.observe(el));
   document.querySelectorAll('.step').forEach((el,k)=>{
-    el.classList.toggle('on',k===active);
+    el.classList.toggle('on',k===Math.max(0,active));
     el.classList.toggle('aft',STEPS[k].t>=0.5);
   });
 }
@@ -507,6 +683,7 @@ function applyLang(){
   document.documentElement.lang = lang==='zh'?'zh-Hant':'en';
   document.body.classList.toggle('zh',lang==='zh');
   $('lang').textContent=L.lang;
+  $('sndLbl').textContent=SND.isOn()?L.sndOn:L.snd;
   $('kicker').textContent=L.kicker;
   $('title').innerHTML=L.title[0]+'<em>'+L.title[1]+'</em>';
   $('dek').textContent=L.dek;
@@ -522,9 +699,19 @@ function applyLang(){
   buildSteps(); updateMetrics();
 }
 $('lang').addEventListener('click',()=>{ lang = lang==='en'?'zh':'en'; applyLang(); });
+$('snd').addEventListener('click',()=>{
+  const isOn = SND.toggle();
+  $('snd').classList.toggle('on',isOn);
+  $('snd').setAttribute('aria-pressed', isOn?'true':'false');
+  $('sndLbl').textContent = isOn?COPY[lang].sndOn:COPY[lang].snd;
+});
 
 /* ============ slider + hover ============ */
-$('scrub').addEventListener('input',e=>{ manual=true; tT=+e.target.value/1000; updateMetrics(); });
+$('scrub').addEventListener('input',e=>{
+  manual=true; tT=+e.target.value/1000;
+  const m=updateMetrics();
+  SND.scrub(Math.max(0,Math.min(1,(MED_NOW-m.med)/(MED_NOW-MED_AFT))));
+});
 
 const holder=$('holder'), tip=$('tip');
 function onMove(ev){
@@ -535,8 +722,10 @@ function onMove(ev){
     const dx=px(V[i].cx)-mx, dy=py(V[i].cy)-my, q=dx*dx+dy*dy;
     if(q<bd){ bd=q; best=i; }
   }
+  const moved = best!==hoverIdx;
   hoverIdx=best;
   if(best<0){ tip.style.opacity=0; return; }
+  if(moved) SND.tick(V[best].near_clinic_m*(1-t)+V[best].near_pharm_m*t);
   const v=V[best], L=COPY[lang];
   tip.innerHTML=`<div class="n">${v.dist} ${v.vill}</div>
     <div class="r"><span>${L.tipW}</span><b>${v.female.toLocaleString()}</b></div>
