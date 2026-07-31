@@ -332,9 +332,29 @@ zh:{
    button, which doubles as the user gesture browsers require before an
    AudioContext is allowed to start. */
 const SND = (function(){
-  let ctx=null, master=null, on=false;
+  let ctx=null, master=null, wet=null, on=false;
   let sOsc=null, sSub=null, sGain=null, sFilt=null, sTimer=null;
-  let lastTick=0;
+  let noiseBuf=null, lastTick=0;
+
+  /* a decaying noise burst used as the reverb's impulse response — cheaper
+     than shipping a real room recording and close enough at this length */
+  function impulse(dur){
+    const n = Math.floor(ctx.sampleRate*dur);
+    const b = ctx.createBuffer(2,n,ctx.sampleRate);
+    for(let c=0;c<2;c++){
+      const d=b.getChannelData(c);
+      for(let i=0;i<n;i++) d[i]=(Math.random()*2-1)*Math.pow(1-i/n,2.6);
+    }
+    return b;
+  }
+  function noise(){
+    if(noiseBuf) return noiseBuf;
+    const n = ctx.sampleRate*2;
+    noiseBuf = ctx.createBuffer(1,n,ctx.sampleRate);
+    const d = noiseBuf.getChannelData(0);
+    for(let i=0;i<n;i++) d[i]=Math.random()*2-1;
+    return noiseBuf;
+  }
 
   function build(){
     if(ctx) return;
@@ -346,6 +366,10 @@ const SND = (function(){
     comp.attack.value=.004; comp.release.value=.22;
     master = ctx.createGain(); master.gain.value=.0001;
     master.connect(comp); comp.connect(ctx.destination);
+    // parallel reverb send, opened by the camera
+    const conv = ctx.createConvolver(); conv.buffer = impulse(2.4);
+    wet = ctx.createGain(); wet.gain.value=.04;
+    master.connect(conv); conv.connect(wet); wet.connect(comp);
   }
   const live = ()=> on && ctx && ctx.state==='running';
 
@@ -436,6 +460,33 @@ const SND = (function(){
     sOsc=sSub=sGain=sFilt=null;
   }
 
+  /* The camera only pushes in on Guandu and Hutian — the two most isolated
+     villages in the story. So the room opens up rather than closing in: the
+     further the map zooms into them, the longer the tail on everything else,
+     and it pulls back when the camera returns to the whole city. The time
+     constant matches the sketch's own 0.06-per-frame camera ease. */
+  function space(z){
+    if(!ctx || !wet) return;
+    const u = Math.max(0, Math.min(1, (z-1)/2));
+    wet.gain.setTargetAtTime(.04+.30*u, ctx.currentTime, .28);
+  }
+  /* the move itself: a quiet band of noise sweeping up on the way in,
+     down on the way back out */
+  function move(dir){
+    if(!live()) return;
+    const t0=ctx.currentTime, dur=1.15;
+    const src=ctx.createBufferSource(); src.buffer=noise(); src.loop=true;
+    const bp=ctx.createBiquadFilter(); bp.type='bandpass'; bp.Q.value=1.4;
+    bp.frequency.setValueAtTime(dir>0?220:900, t0);
+    bp.frequency.exponentialRampToValueAtTime(dir>0?900:220, t0+dur);
+    const g=ctx.createGain();
+    g.gain.setValueAtTime(.0001,t0);
+    g.gain.exponentialRampToValueAtTime(.055, t0+dur*.45);
+    g.gain.exponentialRampToValueAtTime(.0001, t0+dur);
+    src.connect(bp); bp.connect(g); g.connect(master);
+    src.start(t0); src.stop(t0+dur+.05);
+  }
+
   /* hovering a village: the further it is from a pickup point, the lower and
      duller its tick */
   function tick(d){
@@ -455,6 +506,7 @@ const SND = (function(){
       if(ctx.state==='suspended') ctx.resume();
       master.gain.cancelScheduledValues(ctx.currentTime);
       master.gain.setTargetAtTime(.9, ctx.currentTime, .08);
+      space(camT.z);   // in case they unmute while the map is already zoomed in
       blip({f:196, dur:.5, peak:.11, atk:.02});
       blip({f:392, dur:.6, peak:.055, atk:.02, delay:.13});
     }else{
@@ -464,7 +516,7 @@ const SND = (function(){
     }
     return on;
   }
-  return {toggle, step, numbers, shift, scrub, tick, isOn:()=>on};
+  return {toggle, step, numbers, shift, scrub, tick, space, move, isOn:()=>on};
 })();
 
 /* ============ projection + camera ============ */
@@ -641,6 +693,7 @@ function setStep(i,force){
   active=i; manual=false;
   const s=STEPS[i];
   tT=s.t; hiSet=s.hi;
+  const prevCam=camT;
   camT = s.cam ? {lon:s.cam.lon,lat:s.cam.lat,z:s.cam.z} : {...HOME};
   const L=COPY[lang];
   $('phaseV').textContent = s.t<0.5?L.now:L.after;
@@ -654,6 +707,11 @@ function setStep(i,force){
   if(!force){
     SND.step(s.t>=0.5);
     if(prevT<0.5 && s.t>=0.5) SND.shift();
+    SND.space(camT.z);
+    // Guandu -> Hutian drops the zoom slightly but is still a move deeper in;
+    // only an actual return to the whole city sweeps back down
+    if(Math.abs(camT.z-prevCam.z)>.01 || Math.abs(camT.lon-prevCam.lon)>1e-4)
+      SND.move(camT.z<=1.01 ? -1 : 1);
     const el=document.querySelector('.step[data-i="'+i+'"]');
     if(el) SND.numbers([...el.querySelectorAll('.num')].map(n=>
       n.classList.contains('b')?'b':n.classList.contains('a')?'a':''));
