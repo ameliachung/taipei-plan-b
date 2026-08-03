@@ -820,9 +820,21 @@ $('scrub').addEventListener('input',e=>{
 });
 
 const holder=$('holder'), tip=$('tip');
+/* px()/py() answer in the sketch's own coordinate space, so the pointer has to be
+   converted into that space — not into #holder's. fit() caps the canvas at 720px
+   tall and then takes its width from the map's aspect ratio, so on a wide screen
+   the canvas is narrower than the full-width #holder and sits centred inside it:
+   62px of slack at 1440px, which was enough to name a village in the wrong
+   district. Measuring the canvas itself and dividing by W covers it — W is the
+   width the sketch believes it has, the rect is what the screen actually shows,
+   so their ratio is whatever the browser did to it in between. */
 function onMove(ev){
-  const rect=holder.getBoundingClientRect();
-  const mx=ev.clientX-rect.left, my=ev.clientY-rect.top;
+  const cv=holder.querySelector('canvas'); if(!cv) return;
+  const rect=cv.getBoundingClientRect(), k=rect.width/W;
+  const mx=(ev.clientX-rect.left)/k, my=(ev.clientY-rect.top)/k;
+  // #holder spans the whole column, so the cursor can be inside it and well off
+  // the map; without this the nearest-village search still claims an edge village
+  if(mx<0||my<0||mx>W||my>H){ hoverIdx=-1; tip.style.opacity=0; return; }
   let best=-1, bd=26*26;
   for(let i=0;i<V.length;i++){
     const dx=px(V[i].cx)-mx, dy=py(V[i].cy)-my, q=dx*dx+dy*dy;
@@ -837,9 +849,10 @@ function onMove(ev){
     <div class="r"><span>${L.tipW}</span><b>${v.female.toLocaleString()}</b></div>
     <div class="r a"><span>${L.tipN}</span><b>${Math.round(v.near_clinic_m)} m</b></div>
     <div class="r b"><span>${L.tipA}</span><b>${Math.round(v.near_pharm_m)} m</b></div>`;
+  // #tip is a child of .figure, so its left/top are read in the same space
   const fg=holder.parentElement.getBoundingClientRect();
-  let lx=ev.clientX-fg.left+16, ly=ev.clientY-fg.top+14;
-  if(lx>fg.width-195) lx=ev.clientX-fg.left-186;
+  let lx=(ev.clientX-fg.left)/k+16, ly=(ev.clientY-fg.top)/k+14;
+  if(lx>fg.width/k-195) lx=(ev.clientX-fg.left)/k-186;
   tip.style.left=lx+'px'; tip.style.top=ly+'px'; tip.style.opacity=1;
 }
 holder.addEventListener('mousemove',onMove);
