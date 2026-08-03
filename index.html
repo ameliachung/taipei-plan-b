@@ -96,7 +96,27 @@
   .num.a{color:var(--now)} .num.b{color:var(--after)}
 
   /* ---------- finale ---------- */
+  /* The last passage leaves the right-hand column and becomes the head of a
+     centred stage: the text, then the map it is talking about, then the slider,
+     then the numbers the slider moves. The point of the section is that dragging
+     changes all three at once, so all three have to be on screen together. */
   .finale{padding:10vh 0 14vh;max-width:900px;margin:0 auto}
+  /* .act is the one-screen contract: text, map, slider and numbers are a single
+     column that is never taller than the viewport, so sizeStage() has a fixed
+     budget to fit the map into instead of guessing where the section will land. */
+  /* the top pad also has to clear #ctl, which is fixed at 16px + ~34px tall and
+     would otherwise sit on the closing heading on a short or narrow screen */
+  .act{min-height:100vh;display:flex;flex-direction:column;justify-content:center;
+    padding:max(5vh,66px) 0 5vh;box-sizing:border-box}
+  .closer{text-align:center;max-width:46ch;margin:0 auto 26px}
+  .closer h2{font-size:clamp(20px,2.5vw,28px);font-weight:700;letter-spacing:-.01em;
+    line-height:1.3;margin:0 0 12px}
+  .closer p{font-size:clamp(15px,1.7vw,17.5px);line-height:1.72;color:var(--mut);margin:0}
+  .stage{display:flex;justify-content:center;align-items:flex-start;margin-bottom:26px}
+  /* .figure is width:100% for the sticky column; here it must shrink to the
+     canvas, or the phase readout and legend would pin themselves to the edges
+     of the 900px section instead of the edges of the map. */
+  .stage .figure{width:auto;transform-origin:top center}
   .track{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:18px;margin-bottom:34px}
   .end{font-size:12.5px;font-weight:700;letter-spacing:.06em;color:var(--faint);white-space:nowrap;transition:color .2s}
   .end.on.a{color:var(--now)} .end.on.b{color:var(--after)}
@@ -164,15 +184,19 @@
   </div>
 
   <section class="finale">
-    <div class="track">
-      <div class="end on a" id="endA"></div>
-      <input id="scrub" type="range" min="0" max="1000" value="1000">
-      <div class="end b on" id="endB" style="text-align:right"></div>
-    </div>
-    <div class="metrics">
-      <div class="m"><div class="k" id="kMed"></div><div class="v" id="mMed"></div></div>
-      <div class="m"><div class="k" id="kFar"></div><div class="v" id="mFar"></div></div>
-      <div class="m"><div class="k" id="kPop"></div><div class="v" id="mPop"></div></div>
+    <div class="act">
+      <div class="closer" id="closer"></div>
+      <div class="stage" id="stage"></div>
+      <div class="track">
+        <div class="end on a" id="endA"></div>
+        <input id="scrub" type="range" min="0" max="1000" value="1000">
+        <div class="end b on" id="endB" style="text-align:right"></div>
+      </div>
+      <div class="metrics">
+        <div class="m"><div class="k" id="kMed"></div><div class="v" id="mMed"></div></div>
+        <div class="m"><div class="k" id="kFar"></div><div class="v" id="mFar"></div></div>
+        <div class="m"><div class="k" id="kPop"></div><div class="v" id="mPop"></div></div>
+      </div>
     </div>
     <p class="tag" id="tagline"></p>
     <p class="hintline" id="hint"></p>
@@ -595,11 +619,27 @@ function paint(dst,r,g,b){
 const $=id=>document.getElementById(id);
 const reduce=window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-function fit(aw,ah){
+/* The figure has two homes — the sticky story column and the closing stage (see
+   "the closing stage" below). Declared up here because p.setup() needs to know
+   which one it is measuring, and setup can run before that block is reached. */
+const FIG=document.querySelector('.figure'), STICKY=document.querySelector('.sticky');
+let staged=false;
+/* Always measure the container, never the figure: in the stage the figure is
+   width:auto and may carry a scale, so measuring it would feed the canvas its
+   own width back and shrink it a little more on every resize. */
+const availW=()=>((staged?$('stage'):STICKY).getBoundingClientRect().width);
+
+/* Split out of fit() so the stage can ask what the canvas *would* measure in a
+   given box without disturbing the one that is currently on screen. */
+function dims(aw,ah){
   const cap=Math.min(ah, 720);
   let h=cap, w=h*(DW/DH);
   if(w>aw){ w=aw; h=w*(DH/DW); }
-  W=Math.round(w); H=Math.round(h);
+  return {w:Math.round(w), h:Math.round(h)};
+}
+const canvasAH=()=>window.innerHeight*(window.innerWidth<840?0.46:0.86);
+function fit(aw,ah){
+  const d=dims(aw,ah); W=d.w; H=d.h;
   sc=Math.min((W-2*PAD)/DW,(H-2*PAD)/DH);
 }
 const px=lon=>W/2+(lon-cam.lon)*KX*sc*cam.z;
@@ -608,8 +648,7 @@ const py=lat=>H/2-(lat-cam.lat)*sc*cam.z;
 /* ============ sketch ============ */
 function sketch(p){
   p.setup=function(){
-    const box=$('holder').parentElement.getBoundingClientRect();
-    fit(box.width, window.innerHeight*(window.innerWidth<840?0.46:0.86));
+    fit(availW(), canvasAH());
     p.createCanvas(W,H).parent('holder');
     p.pixelDensity(Math.min(2,window.devicePixelRatio||1));
     const S=128; sprite=p.createGraphics(S,S); sprite.pixelDensity(1);
@@ -623,13 +662,15 @@ function sketch(p){
     // setStep is idempotent, so clearing `active` here costs nothing visually
     // and lets the reader's arrival at the first step sound like every other one
     active=-1;
+    // the stage can only reserve room once there is a canvas to measure
+    sizeStage();
   };
   p.windowResized=function(){
-    const box=$('holder').parentElement.getBoundingClientRect();
-    fit(box.width, window.innerHeight*(window.innerWidth<840?0.46:0.86));
+    fit(availW(), canvasAH());
     p.resizeCanvas(W,H);
     outlineBuf=p.createGraphics(W,H); outlineBuf.pixelDensity(p.pixelDensity());
     outlineKey=null;
+    sizeStage();
   };
   p.draw=function(){
     if(!reduce) pulse+=0.016;
@@ -735,6 +776,7 @@ function updateMetrics(){
 const MED_NOW=metrics(0).med, MED_AFT=metrics(1).med;
 
 /* ============ steps ============ */
+const LAST=STEPS.length-1;
 function setStep(i,force){
   if(i===active&&!force) return;
   const prevT=tT;
@@ -768,10 +810,14 @@ function setStep(i,force){
 
 function buildSteps(){
   const L=COPY[lang];
-  $('steps').innerHTML = L.steps.map((s,i)=>
+  // the closing passage is no longer scrolled past in the column; it heads the
+  // stage instead. STEPS[LAST] itself is untouched — only who triggers it moved.
+  $('steps').innerHTML = L.steps.slice(0,LAST).map((s,i)=>
     `<section class="step" data-i="${i}"><div class="inner">
        <h2>${s.h}</h2>${s.p.map(x=>`<p>${x}</p>`).join('')}
      </div></section>`).join('');
+  const f=L.steps[LAST];
+  $('closer').innerHTML = `<h2>${f.h}</h2>${f.p.map(x=>`<p>${x}</p>`).join('')}`;
   if(window.__obs) window.__obs.disconnect();
   window.__obs = new IntersectionObserver(es=>{
     es.forEach(e=>{ if(e.isIntersecting) setStep(+e.target.dataset.i); });
@@ -821,13 +867,14 @@ $('scrub').addEventListener('input',e=>{
 
 const holder=$('holder'), tip=$('tip');
 /* px()/py() answer in the sketch's own coordinate space, so the pointer has to be
-   converted into that space — not into #holder's. fit() caps the canvas at 720px
-   tall and then takes its width from the map's aspect ratio, so on a wide screen
-   the canvas is narrower than the full-width #holder and sits centred inside it:
-   62px of slack at 1440px, which was enough to name a village in the wrong
-   district. Measuring the canvas itself and dividing by W covers it — W is the
-   width the sketch believes it has, the rect is what the screen actually shows,
-   so their ratio is whatever the browser did to it in between. */
+   converted into that space — not into #holder's. Two separate things make those
+   differ. fit() caps the canvas at 720px tall and then takes its width from the
+   map's aspect ratio, so on a wide screen the canvas is narrower than the
+   full-width #holder and sits centred inside it (62px of slack at 1440px); and in
+   the closing stage the figure carries a CSS scale. Measuring the canvas itself
+   and dividing by W covers both: W is the width the sketch believes it has, the
+   rect is what the screen actually shows, so their ratio is whatever the browser
+   did to it in between. */
 function onMove(ev){
   const cv=holder.querySelector('canvas'); if(!cv) return;
   const rect=cv.getBoundingClientRect(), k=rect.width/W;
@@ -849,7 +896,8 @@ function onMove(ev){
     <div class="r"><span>${L.tipW}</span><b>${v.female.toLocaleString()}</b></div>
     <div class="r a"><span>${L.tipN}</span><b>${Math.round(v.near_clinic_m)} m</b></div>
     <div class="r b"><span>${L.tipA}</span><b>${Math.round(v.near_pharm_m)} m</b></div>`;
-  // #tip is a child of .figure, so its left/top are read in the same space
+  // #tip is a child of .figure, so its left/top are read before the scale is
+  // applied — the same k has to come back out of these numbers too
   const fg=holder.parentElement.getBoundingClientRect();
   let lx=(ev.clientX-fg.left)/k+16, ly=(ev.clientY-fg.top)/k+14;
   if(lx>fg.width/k-195) lx=(ev.clientX-fg.left)/k-186;
@@ -858,8 +906,62 @@ function onMove(ev){
 holder.addEventListener('mousemove',onMove);
 holder.addEventListener('mouseleave',()=>{hoverIdx=-1; tip.style.opacity=0;});
 
+/* ============ the closing stage ============
+   The map moves house rather than being redrawn: appendChild keeps the p5 canvas
+   and its drawing context intact, and moving the whole .figure carries the phase
+   readout, the legend and the tooltip's frame of reference along with it — onMove
+   measures holder.parentElement, so the canvas must not travel on its own.
+   FIG, STICKY and staged are declared further up, next to availW(). */
+const ACT=document.querySelector('.act'), STAGE=$('stage');
+const outerH=el=>{ const s=getComputedStyle(el);
+  return el.getBoundingClientRect().height+parseFloat(s.marginTop)+parseFloat(s.marginBottom); };
+
+/* The stage reserves its height from the first layout, whether or not the map is
+   standing in it, so the hand-over does not shove the slider and the numbers down
+   the page.
+
+   The room left for the map is whatever .act's one-viewport budget has after its
+   other children have taken their share. Measuring the siblings rather than
+   allowing a fixed margin keeps this honest when the copy runs to a second line
+   or the metrics stack up on a narrow screen. */
+function sizeStage(){
+  // What the canvas will measure once it is standing in the stage — computed
+  // rather than read off the figure, so the room is reserved correctly before p5
+  // has made a canvas at all, and while the map is still in the story column at
+  // a different width.
+  const natH=dims(STAGE.getBoundingClientRect().width, canvasAH()).h;
+  const cs=getComputedStyle(ACT);
+  const budget=window.innerHeight-parseFloat(cs.paddingTop)-parseFloat(cs.paddingBottom);
+  let taken=0;
+  for(const el of ACT.children) if(el!==STAGE) taken+=outerH(el);
+  const room=budget-taken-(outerH(STAGE)-STAGE.getBoundingClientRect().height);
+  // scale only ever shrinks; on a roomy screen it comes out at 1, because the map
+  // is boxed in by the narrow story column rather than by its own height
+  const k=Math.max(.55, Math.min(1, room/natH));
+  FIG.style.transform=(staged&&k<1)?'scale('+k+')':'';
+  STAGE.style.height=(natH*k)+'px';
+}
+function toStage(on){
+  if(on===staged) return;
+  staged=on;
+  if(on){ STAGE.appendChild(FIG); setStep(LAST); }
+  else  { FIG.style.transform=''; STICKY.appendChild(FIG); }
+  // refit to whichever container the map now lives in; the stage is wider than
+  // the story column, so this is a real resize, not just a re-measure
+  if(holder.querySelector('canvas')) P5.windowResized(); else sizeStage();
+}
+/* Watching the whole section, not a marker at the top of it. A zero-height
+   sentinel stops intersecting as soon as it scrolls off the top, which on a
+   phone — where the finale is several screens tall — sent the map back to the
+   story column while the reader was still looking at the slider, leaving an
+   empty hole in its place. .finale always overlaps the band, so the map stays
+   put until the reader scrolls back above the section entirely. */
+new IntersectionObserver(es=>toStage(es[0].isIntersecting),
+  {rootMargin:'0px 0px -40% 0px'}).observe(document.querySelector('.finale'));
+
 applyLang();
-new p5(sketch);
+const P5=new p5(sketch);
+sizeStage();
 </script>
 </body>
 </html>
