@@ -414,11 +414,13 @@ const SND = (function(){
     blip({f:168, f2:118, dur:.10, peak:.075*amp, atk:.003, delay:dub});
   }
 
-  /* Rate and loudness both follow `t`, the story's own Now -> After morph, so
-     the pulse quickens and swells as the drug gets closer: 56 bpm at the
-     prescription-only end, 104 bpm once it sits on the pharmacy counter. The
-     finale slider drives `t` directly, so dragging it puts the city's pulse
-     in the reader's hand.
+  /* Rate and loudness both follow `t`, the story's own Now -> After morph.
+     The pulse runs fast and hard while the drug is locked behind a
+     prescription — 104 bpm, the body under pressure — and settles as the
+     drug moves to the pharmacy counter: 56 bpm, quieter, a resting heart.
+     Reclassification is the thing that helps, so the relief has to be
+     audible as the story arrives at it. The finale slider drives `t`
+     directly, so dragging it puts the city's pulse in the reader's hand.
      Beats are scheduled slightly ahead of the clock rather than fired from
      the timer itself, so the rhythm stays sample-accurate even while the main
      thread is busy drawing 456 villages. */
@@ -427,7 +429,7 @@ const SND = (function(){
     if(!live()) return;
     if(document.hidden){ nextBeat = ctx.currentTime + .2; return; }
     const u = Math.max(0, Math.min(1, t));
-    const period = 60/(56 + 48*u), amp = .26 + .36*u;
+    const period = 60/(104 - 48*u), amp = .58 - .30*u;
     // a backgrounded tab leaves the schedule far behind; resync rather than
     // firing every missed beat at once
     if(nextBeat < ctx.currentTime - .5) nextBeat = ctx.currentTime + .05;
